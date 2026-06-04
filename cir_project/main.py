@@ -5183,6 +5183,7 @@ class PracticalLimitationAnalysis:
 
     def analyze_overfitting_risk(self) -> dict:
         """Train/validation/test R2 gap analysis."""
+        from sklearn.metrics import r2_score
         n_train = len(self.train_df)
         split = int(n_train * 0.8)
         fit_df = self.train_df.iloc[:split]
