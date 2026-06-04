@@ -229,7 +229,7 @@ print("All packages installed.")
 try:
     from google.colab import drive
     drive.mount("/content/drive")
-except ImportError:
+except Exception:
     pass
 
 import os
