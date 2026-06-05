@@ -11,7 +11,7 @@ MARKDOWN_INSERTS = {
 
 **Models Implemented:** Base CIR | CIR++ (Brigo-Mercurio) | CIR Jump-Diffusion (Duffie-Pan-Singleton)
 **Calibration Methods:** OLS | Maximum Likelihood | Kalman Filter
-**Key Result:** Out-of-sample R² > 0.85 on full test set
+**Key Result:** R² > 0.88 for 6M-1Y maturities; mean per-maturity R² ~ 0.78 (2Y limited by single-factor constraint)
 
 ---
 
@@ -226,17 +226,27 @@ for pkg in ["numpy","pandas","scipy","matplotlib","seaborn",
     install(pkg)
 print("All packages installed.")
 
-try:
-    from google.colab import drive
-    drive.mount("/content/drive")
-except Exception:
-    pass
-
 import os
 os.makedirs("data", exist_ok=True)
 os.makedirs("outputs/plots", exist_ok=True)
 os.makedirs("outputs/results", exist_ok=True)
-print("Directories ready. Place train.csv and test.csv in data/.")
+
+# Upload data files if not already present
+if not os.path.exists("data/train.csv") or not os.path.exists("data/test.csv"):
+    try:
+        from google.colab import files
+        print("Please upload train.csv and test.csv:")
+        uploaded = files.upload()
+        for name, content in uploaded.items():
+            path = f"data/{name}"
+            with open(path, "wb") as f:
+                f.write(content)
+            print(f"  Saved: {path}")
+    except ImportError:
+        pass
+
+print("Files in data/:", os.listdir("data"))
+print("Setup complete.")
 '''
 
 
