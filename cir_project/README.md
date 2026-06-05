@@ -1,5 +1,5 @@
 # Stochastic Interest Rate Modelling
-Google collab link -> https://colab.research.google.com/drive/1oLCpMA8Nb_OHl0lT1W5NVDf6ppkyzVJU
+Google collab link -> https://colab.research.google.com/drive/1oLCpMA8Nb_OHl0lT1W5NVDf6ppkyzVJU?usp=sharing
 ### Models Implemented
 
 | Model | Description | Parameters |
