@@ -1,5 +1,5 @@
 # Stochastic Interest Rate Modelling
-Google collab link -> https://colab.research.google.com/drive/1-v_ICi--oo65yc03l4aaCZnzEIlswDRZ?usp=sharing
+Google collab link -> https://colab.research.google.com/drive/1oLCpMA8Nb_OHl0lT1W5NVDf6ppkyzVJU
 ### Models Implemented
 
 | Model | Description | Parameters |
@@ -18,7 +18,7 @@ Google collab link -> https://colab.research.google.com/drive/1-v_ICi--oo65yc03l
 
 ```
 cir_project/
-  main.py              # Full pipeline (8200+ lines)
+  main.py              # Full pipeline (~5900 lines)
   main.ipynb           # Notebook version (auto-generated)
   build_notebook.py    # main.py -> main.ipynb converter
   requirements.txt     # Python dependencies
