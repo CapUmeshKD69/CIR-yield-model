@@ -1,5 +1,5 @@
 # Stochastic Interest Rate Modelling
-Google collab link -> https://colab.research.google.com/drive/1Vbq_IVRIJ2qDAWZIakEn2haFPHLTOZBi?usp=sharing
+Google collab link -> https://colab.research.google.com/drive/1Vbq_IVRIJ2qDAWZIakEn2haFPHLTOZBi?usp=sharing 
 ### Models Implemented
 
 | Model | Description | Parameters |
@@ -49,7 +49,7 @@ python build_notebook.py
 
 ### Key Results
 
-- Out-of-sample R^2 > 0.85 across 8 maturities (6M--30Y)
+- Out-of-sample R^2 > 0.85 across 4 maturities (6M--2Y)
 - CIR++ fits the initial term structure to < 2 bps
 - CIR-J improves performance during jump/stress periods
 - Rolling calibration reveals time-varying Feller condition violations
