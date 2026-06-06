@@ -9,13 +9,35 @@ prediction, calibration, and analysis.
 
 from __future__ import annotations
 
+import os
 import sys
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+class Tee:
+    """Mirrors standard output to a log file while still printing to terminal."""
+    def __init__(self, filename: str):
+        self.terminal = sys.stdout
+        self.log = open(filename, "w", encoding="utf-8")
+    def write(self, message: str) -> None:
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+    def flush(self) -> None:
+        self.terminal.flush()
+        self.log.flush()
+    def __getattr__(self, attr: str) -> Any:
+        return getattr(self.terminal, attr)
+
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+os.makedirs("outputs/results", exist_ok=True)
+sys.stdout = Tee("outputs/results/execution_log.txt")
 
 import matplotlib
 matplotlib.use("Agg")
