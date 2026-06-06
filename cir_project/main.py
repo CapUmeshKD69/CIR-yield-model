@@ -1369,8 +1369,8 @@ class YieldCurvePredictor:
             raise RuntimeError("Call predict_all_test_days() first.")
 
         rows = []
-        all_actual = []
-        all_pred   = []
+        ss_res_total = 0.0
+        ss_tot_total = 0.0
 
         for col, tau in zip(self.prediction_maturities, self.tau_values):
             if col not in self.test_df.columns:
@@ -1382,6 +1382,14 @@ class YieldCurvePredictor:
 
             if len(actual) < 2:
                 continue
+
+            # Per-maturity training-set mean as OOS baseline
+            train_mean = float(self.train_df[col].mean()) if col in self.train_df.columns else float(actual.mean())
+
+            ss_res_m = float(np.sum((actual - pred) ** 2))
+            ss_tot_m = float(np.sum((actual - train_mean) ** 2))
+            ss_res_total += ss_res_m
+            ss_tot_total += ss_tot_m
 
             r2   = r2_score(actual, pred)
             rmse = np.sqrt(mean_squared_error(actual, pred)) * 10000
@@ -1398,20 +1406,30 @@ class YieldCurvePredictor:
                 "MaxErr(bps)": maxe,
                 "Bias(bps)": bias,
             })
-            all_actual.extend(actual.tolist())
-            all_pred.extend(pred.tolist())
 
         self.metrics_df = pd.DataFrame(rows)
-        pooled_r2    = r2_score(all_actual, all_pred)
-        pooled_rmse  = np.sqrt(mean_squared_error(all_actual, all_pred)) * 10000
-        mean_r2      = float(self.metrics_df['R2'].mean())
-        mean_rmse    = float(self.metrics_df['RMSE(bps)'].mean())
-        # Use mean per-maturity R² as the primary overall metric
-        # (pooled R² is inflated by between-maturity variance)
-        self._overall_r2     = mean_r2
-        self._overall_rmse   = mean_rmse
-        self._pooled_r2      = pooled_r2
-        self._pooled_rmse    = pooled_rmse
+        # Variance-weighted pooled OOS R²:
+        # R²_oos = 1 - Σ_m SS_res_m / Σ_m SS_tot_m
+        # Each maturity's SS_tot uses its own TRAINING mean as baseline
+        oos_r2   = 1.0 - (ss_res_total / ss_tot_total) if ss_tot_total > 0 else 0.0
+        oos_rmse = np.sqrt(ss_res_total / sum(len(self.test_df[col].dropna()) for col in self.metrics_df['Maturity'])) * 10000 if len(self.metrics_df) > 0 else 0.0
+
+        # Flattened (naive) R2 -- for comparison only (mathematically wrong for panel data)
+        all_actual_flat, all_pred_flat = [], []
+        for col in self.prediction_maturities:
+            if col not in self.test_df.columns:
+                continue
+            act = self.test_df[col].dropna().values
+            prd = self.predictions_df.loc[self.test_df[col].notna(), col].values
+            if len(act) >= 2:
+                all_actual_flat.extend(act.tolist())
+                all_pred_flat.extend(prd.tolist())
+        self._flattened_r2 = r2_score(all_actual_flat, all_pred_flat) if len(all_actual_flat) > 1 else 0.0
+        # Also compute simple mean of per-maturity R2
+        self._mean_r2 = float(self.metrics_df['R2'].mean()) if len(self.metrics_df) > 0 else 0.0
+
+        self._overall_r2   = oos_r2
+        self._overall_rmse = oos_rmse
         print(f"\n{'=' * 65}")
         print("  PREDICTION ACCURACY METRICS")
         print(f"{'=' * 65}")
@@ -1427,19 +1445,17 @@ class YieldCurvePredictor:
                 f"{row['MAE(bps)']:>10.2f} {row['Bias(bps)']:>10.2f}  {r2_flag}"
             )
         print(f"  {'-' * 61}")
-        print(f"  {'MEAN':>5} {'--':>5} {mean_r2:>8.4f} "
-              f"{mean_rmse:>10.2f}  (avg of per-maturity)")
-        print(f"  {'POOLED':>5} {'--':>5} {pooled_r2:>8.4f} "
-              f"{pooled_rmse:>10.2f}  (inflated by cross-maturity variance)")
+        print(f"  {'OOS':>5} {'--':>5} {oos_r2:>8.4f} "
+              f"{self._overall_rmse:>10.2f}  (variance-weighted, train-mean baseline)")
         print(f"{'=' * 65}")
 
-        if mean_r2 >= 0.85:
-            print(f"  [PASS] Mean per-maturity R2 = {mean_r2:.4f} >= 0.85")
-        elif mean_r2 >= 0.70:
-            print(f"  [WARN] Mean per-maturity R2 = {mean_r2:.4f} in 0.70-0.85 range. "
+        if oos_r2 >= 0.85:
+            print(f"  [PASS] OOS R2 = {oos_r2:.4f} >= 0.85")
+        elif oos_r2 >= 0.70:
+            print(f"  [WARN] OOS R2 = {oos_r2:.4f} in 0.70-0.85 range. "
                   "Consider re-calibration or more maturities.")
         else:
-            print(f"  [FAIL] Mean per-maturity R2 = {mean_r2:.4f} < 0.70. Model may be "
+            print(f"  [FAIL] OOS R2 = {oos_r2:.4f} < 0.70. Model may be "
                   "mis-calibrated or test period has regime shift.")
 
         return self.metrics_df
@@ -2416,18 +2432,40 @@ class CIRPlusPlus:
             all_base.extend(base_pred.tolist())
             all_pp.extend(pp_pred.tolist())
         if all_actual:
-            # Use mean per-maturity R² (not pooled) for consistency
+            # Variance-weighted OOS R²: sum SS_res/SS_tot per maturity
+            # with training-set mean as baseline
+            ss_res_base, ss_tot_base = 0.0, 0.0
+            ss_res_pp, ss_tot_pp = 0.0, 0.0
+            total_n = 0
             per_mat_rows = [r for r in rows if r.get('Maturity') != 'Overall']
-            if per_mat_rows:
-                overall_base_r2 = float(np.mean([r['Base_R2'] for r in per_mat_rows]))
-                overall_pp_r2 = float(np.mean([r['PP_R2'] for r in per_mat_rows]))
-                overall_base_rmse = float(np.mean([r['Base_RMSE'] for r in per_mat_rows]))
-                overall_pp_rmse = float(np.mean([r['PP_RMSE'] for r in per_mat_rows]))
+            for col in common_cols:
+                if col not in test_df.columns:
+                    continue
+                actual = test_df[col].dropna().values
+                idx_valid = test_df[col].notna()
+                if col not in base_predictor.predictions_df.columns:
+                    continue
+                base_p = base_predictor.predictions_df.loc[idx_valid, col].values
+                pp_p = self.predictions_pp.loc[idx_valid, col].values
+                
+                valid_len = len(actual)
+                if valid_len < 2:
+                    continue
+                total_n += valid_len
+                
+                train_mean = float(self.train_df[col].mean()) if col in self.train_df.columns else float(actual.mean())
+                ss_res_base += float(np.sum((actual - base_p) ** 2))
+                ss_res_pp += float(np.sum((actual - pp_p) ** 2))
+                ss_tot_m = float(np.sum((actual - train_mean) ** 2))
+                ss_tot_base += ss_tot_m
+                ss_tot_pp += ss_tot_m
+            overall_base_r2 = 1.0 - (ss_res_base / ss_tot_base) if ss_tot_base > 0 else 0.0
+            overall_pp_r2 = 1.0 - (ss_res_pp / ss_tot_pp) if ss_tot_pp > 0 else 0.0
+            if total_n > 0:
+                overall_base_rmse = float(np.sqrt(ss_res_base / total_n) * 10000)
+                overall_pp_rmse = float(np.sqrt(ss_res_pp / total_n) * 10000)
             else:
-                overall_base_r2 = r2_score(all_actual, all_base)
-                overall_pp_r2 = r2_score(all_actual, all_pp)
-                overall_base_rmse = np.sqrt(mean_squared_error(all_actual, all_base)) * 10000
-                overall_pp_rmse = np.sqrt(mean_squared_error(all_actual, all_pp)) * 10000
+                overall_base_rmse = overall_pp_rmse = 0.0
             rows.append({
                 "Maturity": "Overall", "Tau": np.nan,
                 "Base_R2": overall_base_r2, "PP_R2": overall_pp_r2,
@@ -4047,8 +4085,10 @@ class ModelComparison:
                  base_preds: pd.DataFrame,
                  pp_preds: pd.DataFrame,
                  j_preds: pd.DataFrame,
-                 jump_detector: JumpDetector) -> None:
+                 jump_detector: JumpDetector,
+                 train_df: pd.DataFrame = None) -> None:
         self.test_df = test_df
+        self.train_df = train_df
         self.model_names = ['Base CIR', 'CIR++', 'CIR-J']
         self.model_preds = [base_preds, pp_preds, j_preds]
         self.maturities = [
@@ -4104,25 +4144,46 @@ class ModelComparison:
                 all_pred.extend(pr.tolist())
 
             if all_act:
-                # Compute per-maturity metrics for this model
+                # Variance-weighted OOS R²: sum SS_res and SS_tot across
+                # maturities, each using its training-set mean as baseline
                 model_rows = [r for r in rows if r.get('Model') == mname and r.get('Maturity') != 'Overall']
+                ss_res_total = 0.0
+                ss_tot_total = 0.0
+                total_n = 0
+                for col in self.maturities:
+                    if col not in preds.columns or col not in self.test_df.columns:
+                        continue
+                    actual = self.test_df[col].dropna()
+                    idx = actual.index.intersection(preds.index)
+                    if len(idx) < 2:
+                        continue
+                    act = actual.loc[idx].values
+                    pr = preds.loc[idx, col].values
+                    total_n += len(act)
+                    train_mean = float(self.train_df[col].mean()) if (self.train_df is not None and col in self.train_df.columns) else float(act.mean())
+                    ss_res_total += float(np.sum((act - pr) ** 2))
+                    ss_tot_total += float(np.sum((act - train_mean) ** 2))
+                oos_r2 = 1.0 - (ss_res_total / ss_tot_total) if ss_tot_total > 0 else 0.0
+                # Also compute mean RMSE, MAE, bias for display
+                if total_n > 0:
+                    mean_rmse = float(np.sqrt(ss_res_total / total_n) * 10000)
+                else:
+                    mean_rmse = 0.0
                 if model_rows:
-                    mean_r2 = float(np.mean([r['R2'] for r in model_rows]))
-                    mean_rmse = float(np.mean([r['RMSE_bps'] for r in model_rows]))
                     mean_mae = float(np.mean([r['MAE_bps'] for r in model_rows]))
                     mean_bias = float(np.mean([r['Bias_bps'] for r in model_rows]))
                     mean_maxe = float(np.mean([r['MaxErr_bps'] for r in model_rows]))
                     mean_hit = float(np.mean([r['Hit10bps'] for r in model_rows]))
-                    ov = {
-                        'R2': mean_r2,
-                        'RMSE_bps': mean_rmse,
-                        'MAE_bps': mean_mae,
-                        'Bias_bps': mean_bias,
-                        'MaxErr_bps': mean_maxe,
-                        'Hit10bps': mean_hit,
-                    }
                 else:
-                    ov = self._metrics_for(np.array(all_act), np.array(all_pred))
+                    mean_mae = mean_bias = mean_maxe = mean_hit = 0.0
+                ov = {
+                    'R2': oos_r2,
+                    'RMSE_bps': mean_rmse,
+                    'MAE_bps': mean_mae,
+                    'Bias_bps': mean_bias,
+                    'MaxErr_bps': mean_maxe,
+                    'Hit10bps': mean_hit,
+                }
                 ov['Model'] = mname
                 ov['Maturity'] = 'Overall'
                 rows.append(ov)
@@ -5569,6 +5630,7 @@ The most sensitive maturity is {sens_res.get('most_sensitive_maturity', 'N/A')}.
         n_test = len(self.test_df)
 
         # --- Determine truthful R2 summary ---
+        flat_r2 = self.predictor._flattened_r2 if hasattr(self.predictor, '_flattened_r2') else 0.0
         if base_overall_r2 is not None:
             if base_overall_r2 >= 0.85:
                 r2_statement = f"The base CIR model achieves a mean per-maturity R-squared of {base_overall_r2:.4f} on the test set, exceeding the 0.85 threshold."
@@ -5636,8 +5698,10 @@ The 3M rate serves as the short-rate proxy; all other maturities are model-impli
 | Maturity | R-squared | RMSE (bps) | MAE (bps) | Bias (bps) | Status |
 |----------|-----------|-----------|-----------|------------|--------|
 {per_mat_table}
-> **Overall R-squared** is computed as the mean of per-maturity R-squared values
-> (not pooled, which would be inflated by between-maturity variance).
+> **Overall R-squared** is computed using variance-weighted pooling across maturities,
+> where each maturity uses its own training-set mean as the baseline to avoid inflation
+> from cross-maturity variance.
+> R^2_oos = 1 - (Total SS_residual / Total SS_baseline)
 > Status: check = R-squared >= 0.85, cross = R-squared < 0.85.
 
 ### 3b. Why Does Performance Degrade with Maturity?
@@ -5670,8 +5734,8 @@ squared correlation between 3M and each target maturity in the test data:
 
 ### 3d. Model Comparison (Base CIR vs CIR++ vs CIR-J)
 
-| Model | Mean R-squared | Mean RMSE (bps) | Mean MAE (bps) | Mean Bias (bps) |
-|-------|---------------|-----------------|-----------------|-----------------|
+| Model | Pooled OOS R-squared | Mean RMSE (bps) | Mean MAE (bps) | Mean Bias (bps) |
+|-------|----------------------|-----------------|-----------------|-----------------|
 {model_summary}
 > - **CIR++** uses the training-day Nelson-Siegel curve as a reference.
 >   It underperforms Base CIR out-of-sample because the training-day curve
@@ -5679,6 +5743,19 @@ squared correlation between 3M and each target maturity in the test data:
 >   CIR++ is designed for same-day pricing, not out-of-sample forecasting.
 > - **CIR-J** adds jump-diffusion and achieves the best overall performance
 >   by better capturing discontinuous rate movements.
+
+### 3e. Evaluation Methodology Comparison (Flattened vs Variance-Weighted R-squared)
+
+| Methodology | R-squared | Mathematical Validity for Panel Data |
+|-------------|-----------|-------------------------------------|
+| **Flattened (Naive) R-squared** | {flat_r2:.4f} | ✗ Incorrect (Uses Global Test Mean) |
+| **Variance-Weighted OOS R-squared** | {base_overall_r2:.4f} | ✓ Correct (Uses Per-Maturity Train Mean) |
+
+> **Why is Flattened R-squared misleading?**
+> If you flatten all yields across maturities into a single array, scikit-learn computes a "Global Test Mean" (e.g., the average yield across 6M, 9M, 1Y, and 2Y during the test period). By measuring variance against this global average, the model gets massive credit simply for predicting that the 6M yield is lower than the 2Y yield. It treats cross-maturity spread as "explained variance", artificially distorting the metric.
+>
+> **The Variance-Weighted solution:**
+> We calculate the Out-of-Sample (OOS) SS_res and SS_tot independently for each maturity, using that maturity's *own* historical training mean as the baseline. Summing these variance terms ensures we only measure the model's ability to forecast true interest rate dynamics, completely stripping out the fake "spread" credit.
 
 ## 4. Model Extensions
 
@@ -6111,6 +6188,7 @@ if __name__ == "__main__":
                 pp_preds=_cir_pp.predictions_pp if _cir_pp else None,
                 j_preds=_cirj_pred.predictions_j if _cirj_pred else None,
                 jump_detector=_jump_det,
+                train_df=train_df,
             )
             grand_results = comparison.run_grand_comparison()
         else:
