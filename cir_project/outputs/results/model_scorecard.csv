@@ -1,0 +1,8 @@
+,Base CIR,CIR++,CIR-J
+Overall R2,0.9649,0.9522,0.9671
+Overall RMSE (bps),24.2,28.2,23.4
+Best Mat (R2),6M,6M,6M
+Worst Mat (R2),2Y,2Y,2Y
+Hit Rate <10bp,53.1%,36.8%,53.6%
+N Parameters,3,3+shift,7
+Complexity,Low,Medium,High
